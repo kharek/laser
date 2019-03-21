@@ -76,7 +76,8 @@ typedef enum laserResult {
     LASER_ERROR_INVALID_RANGE = -2,
     LASER_ERROR_VERSION_UNSUPPORTED = -3,
     LASER_ERROR_FORMAT_UNSUPPORTED = -4,
-    LASER_ERROR_IO_READ = -5
+    LASER_ERROR_IO_READ = -5,
+	LASER_ERROR_PARAM = -6
 } laserResult;
 
 LASER_API const char* laser_result_str(laserResult res);
@@ -155,6 +156,10 @@ typedef struct laserPoint {
     int8_t scan_angle;
     uint8_t usr;
     uint16_t point_id;
+    uint16_t red;
+    uint16_t blue;
+    uint16_t green;
+
 } laserPoint;
 
 typedef uint64_t (*laserIoReadFn)(void* usr, void* data, uint64_t size, uint64_t offset);
@@ -180,6 +185,9 @@ LASER_API laserResult laser_info_from_io(laserInfo* info, laserIoReadFn fn, void
 LASER_API laserResult laser_read_from_io(laserPoint* points, uint64_t stride, laserIoReadFn fn, void* usr);
 LASER_API laserResult laser_read_range_from_io(laserPoint* points, uint64_t stride, laserIoReadFn fn, void* usr, uint64_t first, uint64_t count);
 
+LASER_API laserResult laser_info_print(laserInfo* 		info);
+LASER_API laserResult laser_points_print(laserPoint* 	points, uint64_t point_count);
+
 typedef enum laserAttribType {
     LASER_ATTRIB_TYPE_NONE = -1,
 
@@ -192,12 +200,12 @@ typedef enum laserAttribType {
     LASER_ATTRIB_TYPE_SCAN_ANGLE,                       /* int8_t   */
     LASER_ATTRIB_TYPE_USR,                              /* uint8_t  */
     LASER_ATTRIB_TYPE_POINT_ID,                         /* uint16_t */
+	LASER_ATTRIB_TYPE_GPS_TIME,							/* uint64_t */
+    LASER_ATTRIB_TYPE_RED,								/* uint16_t */
+    LASER_ATTRIB_TYPE_GREEN,							/* uint16_t */
+    LASER_ATTRIB_TYPE_BLUE,								/* uint16_t */
     /*
      * Unsupported:
-     * LASER_ATTRIB_TYPE_GPS_TIME,
-     * LASER_ATTRIB_TYPE_RED,
-     * LASER_ATTRIB_TYPE_GREEN,
-     * LASER_ATTRIB_TYPE_BLUE,
      * LASER_ATTRIB_TYPE_WAVEFORM_ID,
      * LASER_ATTRIB_TYPE_WAVEFORM_OFFSET,
      * LASER_ATTRIB_TYPE_WAVEFORM_SIZE,
@@ -300,11 +308,11 @@ typedef struct laserPublicHeaderBlock {
 #pragma pack(pop)
 
 static const uint64_t _LASER_ATTRIB_OFFSET_TABLE[6][20] = {
-    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 0, 20, 22, 24, 0, 0, 0, 0, 0, 0, 0 },
-    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 28, 30, 32, 0, 0, 0, 0, 0, 0, 0 },
-    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 0, 0, 0, 28, 29, 37, 41, 45, 49, 53 },
+    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 },
+    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0 },
+    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 0,  20, 22, 24, 0,  0,  0,  0,  0,  0,  0 },
+    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 28, 30, 32, 0,  0,  0,  0,  0,  0,  0 },
+    { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 0,  0,  0,  28, 29, 37, 41, 45, 49, 53 },
     { 0, 4, 8, 12, 14, 15, 16, 17, 18, 20, 28, 30, 32, 34, 35, 43, 47, 51, 55, 59 },
 };
 
@@ -322,6 +330,9 @@ static laserAttrib _LASER_DEFAULT_ATTRIBS[] = {
     { LASER_ATTRIB_TYPE_SCAN_ANGLE, LASER_OFFSET_OF(laserPoint, scan_angle) },
     { LASER_ATTRIB_TYPE_USR, LASER_OFFSET_OF(laserPoint, usr) },
     { LASER_ATTRIB_TYPE_POINT_ID, LASER_OFFSET_OF(laserPoint, point_id) },
+    { LASER_ATTRIB_TYPE_RED, LASER_OFFSET_OF(laserPoint, red) },
+    { LASER_ATTRIB_TYPE_BLUE, LASER_OFFSET_OF(laserPoint, blue) },
+    { LASER_ATTRIB_TYPE_GREEN, LASER_OFFSET_OF(laserPoint, green) },
     LASER_ATTRIB_END
 };
 
@@ -337,17 +348,30 @@ laserResult laser_info_from_mem(laserInfo* info, void* mem, uint64_t size) {
     (void) size;
 
     laserResult res = LASER_SUCCESS;
-    if((res = _laser_check_magic((uint8_t*) mem)) != LASER_SUCCESS) {
+
+    if ( NULL == mem )
+    {
+    	return LASER_ERROR_PARAM;
+    }
+    else if((res = _laser_check_magic((uint8_t*) mem)) != LASER_SUCCESS) {
         return res;
+    }
+    else
+    {
+    	/* Do nothing */
     }
 
     laserPublicHeaderBlock* public_header_block = (laserPublicHeaderBlock*) mem;
     if(public_header_block->version_major > 1 || (public_header_block->version_major == 1 && public_header_block->version_minor > 3)) {
         return LASER_ERROR_VERSION_UNSUPPORTED;
-    } else if(public_header_block->format_id > 5) {
+    }
+    else if(public_header_block->format_id > 5) {
         return LASER_ERROR_FORMAT_UNSUPPORTED;
     }
-
+    else
+    {
+    	/* Do nothing */
+    }
     info->version_major = public_header_block->version_major;
     info->version_minor = public_header_block->version_minor;
     info->point_format = public_header_block->format_id;
@@ -464,6 +488,20 @@ static laserResult _laser_read_attribs_from_mem(void* points, uint64_t stride, u
         if(flags & LASER_ATTRIB_FLAG_POINT_ID) {
             *((uint16_t*) (point + offsets[LASER_ATTRIB_TYPE_POINT_ID])) = *((uint16_t*) (raw_point + offset_table[LASER_ATTRIB_TYPE_POINT_ID]));
         }
+
+        /* RGB */
+        if(flags & LASER_ATTRIB_FLAG_RED) {
+            *((uint16_t*) (point + offsets[LASER_ATTRIB_TYPE_RED])) = *((uint16_t*) (raw_point + offset_table[LASER_ATTRIB_TYPE_RED]));
+        }
+
+        if(flags & LASER_ATTRIB_FLAG_BLUE) {
+            *((uint16_t*) (point + offsets[LASER_ATTRIB_TYPE_BLUE])) = *((uint16_t*) (raw_point + offset_table[LASER_ATTRIB_TYPE_BLUE]));
+        }
+
+        if(flags & LASER_ATTRIB_FLAG_GREEN) {
+            *((uint16_t*) (point + offsets[LASER_ATTRIB_TYPE_GREEN])) = *((uint16_t*) (raw_point + offset_table[LASER_ATTRIB_TYPE_GREEN]));
+        }
+
         point += stride;
         raw_point += point_size;
     }
@@ -535,6 +573,83 @@ const char* laser_result_str(laserResult res) {
         default: return "Unknown error";
     }
 }
+
+laserResult laser_info_print(laserInfo* 	info)
+{
+	laserResult 	res 		= LASER_ERROR_PARAM;
+
+	if ( NULL != info )
+	{
+		res = LASER_SUCCESS;
+		printf("Printing LAS Info:\n");
+
+		printf("\t:version_major\t %d \n", info->version_major);
+		printf("\t:version_minor\t %d \n", info->version_minor);
+		printf("\t:point_count\t %lld \n", info->point_count);
+		printf("\t:point_offset\t %d \n", info->point_offset);
+		printf("\t:point_size\t %d \n", info->point_size);
+		printf("\t:point_format\t %d \n", info->point_format);
+		printf("\t:scale_x\t %f \n", info->scale_x);
+		printf("\t:scale_y\t %f \n", info->scale_y);
+		printf("\t:scale_z\t %f \n", info->scale_z);
+		printf("\t:offset_x\t %f \n", info->offset_x);
+		printf("\t:offset_y\t %f \n", info->offset_y);
+		printf("\t:offset_z\t %f \n", info->offset_z);
+		printf("\t:min_x\t %f \n", info->min_x);
+		printf("\t:min_y\t %f \n", info->min_y);
+		printf("\t:min_z\t %f \n", info->min_z);
+		printf("\t:max_x\t %f \n", info->max_x);
+		printf("\t:max_y\t %f \n", info->max_y);
+		printf("\t:max_z\t %f \n", info->max_z);
+
+		printf("End LAS Info\n");
+	}
+	return res;
+}
+
+laserResult laser_points_print(laserPoint* 	points, uint64_t point_count)
+{
+	laserResult 	res 		= LASER_ERROR_PARAM;
+	uint32_t		l_uCounter 	= 0U;
+
+	if ( NULL  != points)
+	{
+		res 		= LASER_SUCCESS;
+
+//		printf("Printing LAS %lld points :\n", point_count);
+		for ( l_uCounter = 0U; l_uCounter < point_count; l_uCounter++)
+		{
+
+			switch (points[l_uCounter].classification.type)
+			{
+			case 6:
+			case 8:
+			case 0:
+				printf("%lf %lf %lf R %02x  G %02x B %02x  \n",
+								points[l_uCounter].x,
+								points[l_uCounter].y,
+								points[l_uCounter].z,
+								points[l_uCounter].red,
+								points[l_uCounter].blue,
+								points[l_uCounter].green);
+				break;
+			default:
+				break;
+			}
+//			if ( l_uCounter % 100 == 0U)
+//			{
+//				printf("%lf %lf %lf\n",
+//						points[l_uCounter].x,
+//						points[l_uCounter].y,
+//						points[l_uCounter].z);
+//			}
+		}
+
+//		printf("End LAS Points\n");
+	}
+	return res;
+}
+
 
 #endif
 
